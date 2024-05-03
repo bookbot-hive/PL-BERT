@@ -1,4 +1,4 @@
-#coding: utf-8
+# coding: utf-8
 
 import os
 import os.path as osp
@@ -14,107 +14,116 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
 from text_utils import TextCleaner
 
 import logging
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 np.random.seed(1)
 random.seed(1)
 
+
 class FilePathDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset,
-                 token_maps="token_maps.pkl",
-                 tokenizer="transfo-xl-wt103",
-                 word_separator=3039, 
-                 token_separator=" ", 
-                 token_mask="M", 
-                 max_mel_length=512,
-                 word_mask_prob=0.15,
-                 phoneme_mask_prob=0.1,
-                 replace_prob=0.2):
-        
-        self.data = dataset
+    def __init__(
+        self,
+        dataset,
+        tokenizer,
+        word_separator="[SEP]",
+        token_separator=" ",
+        token_mask="[MASK]",
+        max_mel_length=512,
+        word_mask_prob=0.15,
+        phoneme_mask_prob=0.1,
+        replace_prob=0.2,
+    ):
+        self.dataset = dataset
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         self.max_mel_length = max_mel_length
         self.word_mask_prob = word_mask_prob
         self.phoneme_mask_prob = phoneme_mask_prob
         self.replace_prob = replace_prob
         self.text_cleaner = TextCleaner()
-        
-        self.word_separator = word_separator
+
+        self.word_separator = self.tokenizer.encode(word_separator, add_special_tokens=False)[0]
         self.token_separator = token_separator
         self.token_mask = token_mask
-        
-        with open(token_maps, 'rb') as handle:
-            self.token_maps = pickle.load(handle)     
-            
+
     def __len__(self):
-        return len(self.data)
+        return len(self.dataset)
 
     def __getitem__(self, idx):
+        _input_ids = self.dataset[idx]["input_ids"]
+        _phonemes = self.dataset[idx]["phonemes"]
 
-        phonemes = self.data[idx]['phonemes']
-        input_ids = self.data[idx]['input_ids']
+        words, labels, input_phonemes, masked_index = [], [], [], []
+        phoneme_list = [p for word in _phonemes for p in word]
 
-        words = []
-        labels = ""
-        phoneme = ""
-
-        phoneme_list = ''.join(phonemes)
-        masked_index = []
-        for z in zip(phonemes, input_ids):
-            z = list(z)
-            
-            words.extend([z[1]] * len(z[0]))
+        for phonemes, input_ids in zip(_phonemes, _input_ids):
+            # duplicate word input ids by the number of phonemes in word
+            words.extend([input_ids] * len(phonemes))
             words.append(self.word_separator)
-            labels += z[0] + " "
+
+            # collect phonemes of the current word label
+            labels += phonemes
+            labels += [self.token_separator]
 
             if np.random.rand() < self.word_mask_prob:
                 if np.random.rand() < self.replace_prob:
-                    if np.random.rand() < (self.phoneme_mask_prob / self.replace_prob): 
-                        phoneme += ''.join([phoneme_list[np.random.randint(0, len(phoneme_list))] for _ in range(len(z[0]))])  # randomized
+                    if np.random.rand() < (self.phoneme_mask_prob / self.replace_prob):
+                        # randomly replace phonemes from list of available phonemes
+                        input_phonemes += [
+                            phoneme_list[np.random.randint(0, len(phoneme_list))] for _ in range(len(phonemes))
+                        ]  # randomized
+                        # add starting to ending mask index based on num phonemes in word
+                        masked_index.extend(
+                            (np.arange(len(input_phonemes) - len(phonemes), len(input_phonemes))).tolist()
+                        )
                     else:
-                        phoneme += z[0]
+                        # if not corrupted, append as is
+                        input_phonemes += phonemes
                 else:
-                    phoneme += self.token_mask * len(z[0]) # masked
-                    
-                masked_index.extend((np.arange(len(phoneme) - len(z[0]), len(phoneme))).tolist())
+                    # whole word masking
+                    input_phonemes += [self.token_mask] * len(phonemes)  # masked
+                    # add starting to ending mask index based on num phonemes in word
+                    masked_index.extend((np.arange(len(input_phonemes) - len(phonemes), len(input_phonemes))).tolist())
             else:
-                phoneme += z[0] 
+                # if not corrupted, append as is
+                input_phonemes += phonemes
 
-            phoneme += self.token_separator
+            input_phonemes += [self.token_separator]
 
-
-        mel_length = len(phoneme)
+        mel_length = len(input_phonemes)
         masked_idx = np.array(masked_index)
         masked_index = []
         if mel_length > self.max_mel_length:
             random_start = np.random.randint(0, mel_length - self.max_mel_length)
-            phoneme = phoneme[random_start:random_start + self.max_mel_length]
-            words = words[random_start:random_start + self.max_mel_length]
-            labels = labels[random_start:random_start + self.max_mel_length]
-            
+            input_phonemes = input_phonemes[random_start : random_start + self.max_mel_length]
+            words = words[random_start : random_start + self.max_mel_length]
+            labels = labels[random_start : random_start + self.max_mel_length]
+
             for m in masked_idx:
                 if m >= random_start and m < random_start + self.max_mel_length:
                     masked_index.append(m - random_start)
         else:
             masked_index = masked_idx
-            
-        phoneme = self.text_cleaner(phoneme)
+
+        input_phonemes = self.text_cleaner(input_phonemes)
         labels = self.text_cleaner(labels)
-        words = [self.token_maps[w]['token'] for w in words]
-        
-        assert len(phoneme) == len(words)
-        assert len(phoneme) == len(labels)
-        
-        phonemes = torch.LongTensor(phoneme)
+
+        assert len(input_phonemes) == len(words)
+        assert len(input_phonemes) == len(labels)
+
+        input_phonemes = torch.LongTensor(input_phonemes)
         labels = torch.LongTensor(labels)
         words = torch.LongTensor(words)
-        
-        return phonemes, words, labels, masked_index
-        
+
+        return input_phonemes, words, labels, masked_index
+
+
 class Collater(object):
     """
     Args:
@@ -124,7 +133,6 @@ class Collater(object):
     def __init__(self, return_wave=False):
         self.text_pad_index = 0
         self.return_wave = return_wave
-        
 
     def __call__(self, batch):
         # batch[0] = wave, mel, text, f0, speakerid
@@ -143,7 +151,7 @@ class Collater(object):
         input_lengths = []
         masked_indices = []
         for bid, (phoneme, word, label, masked_index) in enumerate(batch):
-            
+
             text_size = phoneme.size(0)
             words[bid, :text_size] = word
             labels[bid, :text_size] = label
@@ -154,22 +162,20 @@ class Collater(object):
         return words, labels, phonemes, input_lengths, masked_indices
 
 
-def build_dataloader(df,
-                     validation=False,
-                     batch_size=4,
-                     num_workers=1,
-                     device='cpu',
-                     collate_config={},
-                     dataset_config={}):
+def build_dataloader(
+    df, validation=False, batch_size=4, num_workers=1, device="cpu", collate_config={}, dataset_config={}
+):
 
     dataset = FilePathDataset(df, **dataset_config)
     collate_fn = Collater(**collate_config)
-    data_loader = DataLoader(dataset,
-                             batch_size=batch_size,
-                             shuffle=(not validation),
-                             num_workers=num_workers,
-                             drop_last=(not validation),
-                             collate_fn=collate_fn,
-                             pin_memory=(device != 'cpu'))
+    data_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=(not validation),
+        num_workers=num_workers,
+        drop_last=(not validation),
+        collate_fn=collate_fn,
+        pin_memory=(device != "cpu"),
+    )
 
     return data_loader

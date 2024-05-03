@@ -3,30 +3,62 @@
 import os
 import string
 
-_pad = "$"
-_punctuation = ';:,.!?¡¿—…"«»“” '
-_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-_letters_ipa = "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
+_pad = "[PAD]"
+_punctuation = ";:,.!? "
+_letters_ipa = [
+    "a",
+    "b",
+    "tʃ",
+    "d",
+    "e",
+    "f",
+    "ɡ",
+    "h",
+    "i",
+    "dʒ",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "j",
+    "z",
+    "ŋ",
+    "ə",
+    "ɲ",
+    "ʃ",
+    "x",
+    "ʔ",
+]
 
 # Export all symbols:
-symbols = [_pad] + list(_punctuation) + list(_letters) + list(_letters_ipa)
+symbols = [_pad] + list(_punctuation) + _letters_ipa
 
-letters = list(_letters) + list(_letters_ipa)
+letters = _letters_ipa
 
 dicts = {}
 for i in range(len((symbols))):
     dicts[symbols[i]] = i
 
+
 class TextCleaner:
-    def __init__(self, dummy=None):
+    def __init__(self):
         self.word_index_dictionary = dicts
-        print(len(dicts))
+        # print(len(dicts))
+
     def __call__(self, text):
         indexes = []
         for char in text:
             try:
                 indexes.append(self.word_index_dictionary[char])
             except KeyError:
-                indexes.append(self.word_index_dictionary['U']) # unknown token
-#                 print(char)
+                indexes.append(self.word_index_dictionary["[PAD]"])  # unknown token
+        #                 print(char)
         return indexes
