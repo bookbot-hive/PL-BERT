@@ -163,7 +163,7 @@ class Collater(object):
 
 
 def build_dataloader(
-    df, validation=False, batch_size=4, num_workers=1, device="cpu", collate_config={}, dataset_config={}
+    df, validation=False, batch_size=4, num_workers=1, collate_config={}, dataset_config={}
 ):
 
     dataset = FilePathDataset(df, **dataset_config)
@@ -175,7 +175,7 @@ def build_dataloader(
         num_workers=num_workers,
         drop_last=(not validation),
         collate_fn=collate_fn,
-        pin_memory=(device != "cpu"),
+        pin_memory=True,
     )
 
     return data_loader
